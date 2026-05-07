@@ -78,6 +78,7 @@ jobs:
       - name: Set permissions & reload services
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} bash <<'ENDSSH'
+            mkdir -p /var/www/tx-pulse-cms/web/app/uploads
             sudo chown -R www-data:www-data /var/www/tx-pulse-cms/web/app/uploads
             sudo chmod -R 775 /var/www/tx-pulse-cms/web/app/uploads
             sudo systemctl reload php8.3-fpm
