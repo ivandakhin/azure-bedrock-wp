@@ -1,0 +1,28 @@
+server {
+    listen 80;
+    server_name tx-pulse-cms.norwayeast.cloudapp.azure.com;
+
+    root /var/www/tx-pulse-cms/web;
+    index index.php;
+
+    access_log /var/log/nginx/tx-pulse-cms.access.log;
+    error_log  /var/log/nginx/tx-pulse-cms.error.log;
+
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+
+    # Deny access to sensitive files
+    location ~* /(?:uploads|files)/.*\.php$ {
+        deny all;
+    }
+}

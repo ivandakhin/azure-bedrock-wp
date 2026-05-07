@@ -1,0 +1,85 @@
+name: Deploy to Azure VM
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer:v2
+
+      - name: Install Composer dependencies
+        run: composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy files via rsync
+        run: |
+          rsync -az --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.env' \
+            --exclude='.env.local' \
+            --exclude='web/app/uploads' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/var/www/tx-pulse-cms/
+
+      - name: Create .env on server
+        env:
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          WP_HOME: ${{ secrets.WP_HOME }}
+          AUTH_KEY: ${{ secrets.AUTH_KEY }}
+          SECURE_AUTH_KEY: ${{ secrets.SECURE_AUTH_KEY }}
+          LOGGED_IN_KEY: ${{ secrets.LOGGED_IN_KEY }}
+          NONCE_KEY: ${{ secrets.NONCE_KEY }}
+          AUTH_SALT: ${{ secrets.AUTH_SALT }}
+          SECURE_AUTH_SALT: ${{ secrets.SECURE_AUTH_SALT }}
+          LOGGED_IN_SALT: ${{ secrets.LOGGED_IN_SALT }}
+          NONCE_SALT: ${{ secrets.NONCE_SALT }}
+        run: |
+          cat > /tmp/.env <<'ENVEOF'
+          ENVEOF
+          printf 'DB_NAME=%s\n' "$DB_NAME" >> /tmp/.env
+          printf 'DB_USER=%s\n' "$DB_USER" >> /tmp/.env
+          printf 'DB_PASSWORD=%s\n' "$DB_PASSWORD" >> /tmp/.env
+          printf 'DB_HOST=localhost\n' >> /tmp/.env
+          printf 'WP_ENV=production\n' >> /tmp/.env
+          printf 'WP_HOME=%s\n' "$WP_HOME" >> /tmp/.env
+          printf 'WP_SITEURL=%s/wp\n' "$WP_HOME" >> /tmp/.env
+          printf 'AUTH_KEY=%s\n' "$AUTH_KEY" >> /tmp/.env
+          printf 'SECURE_AUTH_KEY=%s\n' "$SECURE_AUTH_KEY" >> /tmp/.env
+          printf 'LOGGED_IN_KEY=%s\n' "$LOGGED_IN_KEY" >> /tmp/.env
+          printf 'NONCE_KEY=%s\n' "$NONCE_KEY" >> /tmp/.env
+          printf 'AUTH_SALT=%s\n' "$AUTH_SALT" >> /tmp/.env
+          printf 'SECURE_AUTH_SALT=%s\n' "$SECURE_AUTH_SALT" >> /tmp/.env
+          printf 'LOGGED_IN_SALT=%s\n' "$LOGGED_IN_SALT" >> /tmp/.env
+          printf 'NONCE_SALT=%s\n' "$NONCE_SALT" >> /tmp/.env
+          scp -i ~/.ssh/deploy_key /tmp/.env ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/var/www/tx-pulse-cms/.env
+          rm /tmp/.env
+
+      - name: Set permissions & reload services
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} bash <<'ENDSSH'
+            sudo chown -R www-data:www-data /var/www/tx-pulse-cms/web/app/uploads
+            sudo chmod -R 775 /var/www/tx-pulse-cms/web/app/uploads
+            sudo systemctl reload php8.3-fpm
+            sudo systemctl reload nginx
+          ENDSSH
