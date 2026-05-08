@@ -42,6 +42,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer:v2
+
+      - name: Install Composer dependencies
+        run: composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist
+
       - name: Setup SSH
         run: |
           mkdir -p ~/.ssh
@@ -49,14 +58,14 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
 
-      - name: Copy docker files to server
+      - name: Deploy files via rsync
         run: |
-          rsync -az \
-            --include='docker-compose.yml' \
-            --include='docker/' \
-            --include='docker/nginx/' \
-            --include='docker/nginx/default.conf' \
-            --exclude='*' \
+          rsync -az --delete \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.env' \
+            --exclude='.env.local' \
+            --exclude='web/app/uploads' \
             -e "ssh -i ~/.ssh/deploy_key" \
             ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/var/www/tx-pulse-cms/
 
@@ -101,7 +110,7 @@ jobs:
           ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} bash <<'ENDSSH'
             cd /var/www/tx-pulse-cms
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker compose pull
+            docker compose pull php
             docker compose up -d
             docker image prune -f
           ENDSSH
