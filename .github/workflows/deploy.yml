@@ -15,12 +15,31 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.version }}
+      image-changed: ${{ steps.changed.outputs.dockerfile }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check if Dockerfile changed
+        id: changed
+        run: |
+          if git diff --name-only HEAD~1 HEAD | grep -q 'Dockerfile'; then
+            echo "dockerfile=true" >> $GITHUB_OUTPUT
+          else
+            echo "dockerfile=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Generate image tag
+        id: meta
+        run: echo "version=sha-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
 
       - name: Login to GitHub Container Registry
+        if: steps.changed.outputs.dockerfile == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -28,11 +47,14 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push Docker image
+        if: steps.changed.outputs.dockerfile == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
 
   deploy:
     runs-on: ubuntu-latest
@@ -84,6 +106,7 @@ jobs:
           SECURE_AUTH_SALT: ${{ secrets.SECURE_AUTH_SALT }}
           LOGGED_IN_SALT: ${{ secrets.LOGGED_IN_SALT }}
           NONCE_SALT: ${{ secrets.NONCE_SALT }}
+          IMAGE_TAG: ${{ needs.build.outputs.image-tag }}
         run: |
           printf 'DB_NAME=%s\n' "$DB_NAME" > /tmp/.env
           printf 'DB_USER=%s\n' "$DB_USER" >> /tmp/.env
@@ -102,15 +125,28 @@ jobs:
           printf 'LOGGED_IN_SALT=%s\n' "$LOGGED_IN_SALT" >> /tmp/.env
           printf 'NONCE_SALT=%s\n' "$NONCE_SALT" >> /tmp/.env
           printf 'GITHUB_REPOSITORY=%s\n' "${{ github.repository }}" >> /tmp/.env
+          printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG" >> /tmp/.env
           scp -i ~/.ssh/deploy_key /tmp/.env ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/var/www/tx-pulse-cms/.env
           rm /tmp/.env
 
-      - name: Pull image and restart containers
+      - name: Copy code into Docker volume and restart
         run: |
           ssh -i ~/.ssh/deploy_key ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} bash <<'ENDSSH'
+            set -e
             cd /var/www/tx-pulse-cms
+
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            docker compose pull php
+
+            if [ "${{ needs.build.outputs.image-changed }}" = "true" ]; then
+              docker compose pull php
+            fi
+
+            docker run --rm \
+              -v /var/www/tx-pulse-cms:/src \
+              -v tx-pulse-cms_app_code:/dst \
+              alpine sh -c "cp -a /src/. /dst/ && rm -rf /dst/web/app/uploads"
+
             docker compose up -d
+
             docker image prune -f
           ENDSSH
